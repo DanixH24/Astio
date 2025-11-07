@@ -1,0 +1,3 @@
+/* CSS di fallback per anteprima locale */
+.panel { outline: 2px dashed #00c8ff; }
+#menu { backdrop-filter: blur(2px); }
