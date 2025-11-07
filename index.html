@@ -6,15 +6,14 @@
     <title>Astio Menu</title>
     <!-- Collegamento esplicito a CSS/JS locali (fallback) -->
     <link id="astio-css" rel="stylesheet" href="./astio.css" />
-    <script id="astio-js" src="./astio.js" defer></script>
 
     <!-- Stili minimi di fallback per garantire visibilità anche senza CSS remoto -->
     <style>
       :root { --bg: rgba(0,0,0,0.7); --panel:#111; --accent:#00c8ff; }
       html, body { height: 100%; margin: 0; font-family: system-ui, Arial, sans-serif; }
-      #menu { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: var(--bg); }
+      #menu { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: var(--bg); z-index: 999999; }
       #menu.show { display: flex; }
-      .panel { background: var(--panel); color: #fff; border: 1px solid var(--accent); border-radius: 10px; padding: 24px; min-width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+      .panel { background: var(--panel); color: #fff; border: 1px solid var(--accent); border-radius: 10px; padding: 24px; min-width: 320px; max-width: 90vw; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
       .panel h1 { margin: 0 0 12px; font-size: 20px; }
       .panel p { margin: 0 0 16px; opacity: 0.8; }
       .row { display: flex; gap: 8px; }
@@ -28,9 +27,12 @@
       <div class="panel" role="dialog" aria-modal="true" aria-labelledby="astio-title">
         <h1 id="astio-title">Astio Menu</h1>
         <p>Premi DEL per aprire/chiudere, ESC per chiudere.</p>
-        <div class="row">
+        <div class="row" style="margin-bottom:10px">
           <button id="closeBtn">Chiudi</button>
-          <button class="secondary" id="dummyAction">Azione demo</button>
+        </div>
+        <!-- Contenuto remoto: index GitHack caricato in iframe -->
+        <div id="remoteContainer" style="width:100%;height:60vh;">
+          <iframe id="remoteFrame" title="Astio Remote" style="width:100%;height:100%;border:1px solid #333;border-radius:8px;background:#000" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
         </div>
       </div>
     </div>
@@ -38,29 +40,22 @@
     <script>
       // Gli URL GitHack verranno ricevuti da Lua al momento dell'apertura
       let REMOTE_CSS = null;
-      let REMOTE_JS  = null;
+      let REMOTE_JS  = null; // non usato: evitiamo il caricamento JS locale per prevenire errori
 
       // Fallback a file locali se gli asset remoti non sono raggiungibili
       const LOCAL_CSS = './astio.css';
-      const LOCAL_JS  = './astio.js';
+      const LOCAL_JS  = './astio.js'; // non utilizzato
 
       let assetsLoaded = false;
-      function loadAssets(remoteCss, remoteJs) {
+      let isOpen = false;
+      function loadAssets(remoteCss) {
         if (assetsLoaded) return;
         const cssEl = document.getElementById('astio-css');
-        const jsEl  = document.getElementById('astio-js');
 
         // CSS: se ho un remoto, provo a sovrascrivere l'href; altrimenti resta locale
         if (remoteCss) {
           cssEl.onerror = () => { cssEl.href = LOCAL_CSS; };
           cssEl.href = remoteCss;
-        }
-
-        // JS: se ho un remoto, provo a sovrascrivere src; altrimenti resta locale
-        if (remoteJs) {
-          jsEl.onerror = () => { jsEl.src = LOCAL_JS; };
-          jsEl.defer = true;
-          jsEl.src = remoteJs;
         }
 
         assetsLoaded = true;
@@ -71,25 +66,43 @@
         : 'Astio';
       const menuEl = document.getElementById('menu');
 
+      function updateVisibility() {
+        menuEl.classList.toggle('show', isOpen);
+        menuEl.setAttribute('aria-hidden', String(!isOpen));
+        console.log('[Astio:NUI] Visibilità aggiornata:', { isOpen });
+      }
+
       // Mostra/nasconde il menu su messaggi dal client.lua
       window.addEventListener('message', (event) => {
         const action = event?.data?.action;
+        console.log('[Astio:NUI] Messaggio ricevuto:', event?.data);
         if (action === 'open') {
           // Se arrivano URL remoti dal Lua, usali
-          if (event?.data?.remoteCss || event?.data?.remoteJs) {
+          if (event?.data?.remoteCss) {
             REMOTE_CSS = event.data.remoteCss || null;
-            REMOTE_JS  = event.data.remoteJs  || null;
-            loadAssets(REMOTE_CSS, REMOTE_JS);
+            loadAssets(REMOTE_CSS);
           } else {
             // Nessun URL remoto: carica fallback locale
-            loadAssets(null, null);
+            loadAssets(null);
           }
-          menuEl.classList.add('show');
-          menuEl.setAttribute('aria-hidden', 'false');
+
+          // Carica index remoto in iframe, se presente
+          const iframe = document.getElementById('remoteFrame');
+          const remoteIndex = event?.data?.remoteIndex;
+          if (remoteIndex) {
+            iframe.src = remoteIndex;
+          } else {
+            // Se manca, mostra un placeholder semplice
+            iframe.srcdoc = '<html><body style="background:#000;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100%">Index remoto non impostato</body></html>';
+          }
+          isOpen = true;
+          updateVisibility();
+          console.log('[Astio:NUI] Menu aperto');
         }
         if (action === 'close') {
-          menuEl.classList.remove('show');
-          menuEl.setAttribute('aria-hidden', 'true');
+          isOpen = false;
+          updateVisibility();
+          console.log('[Astio:NUI] Menu chiuso');
         }
       });
 
@@ -105,6 +118,7 @@
       // ESC chiude il menu via callback dedicata
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+          console.log('[Astio:NUI] ESC premuto: richiesta chiusura');
           fetch(`https://${resourceName}/escape`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json; charset=UTF-8' },
@@ -113,12 +127,15 @@
         }
       });
 
-      // Azione dimostrativa: invia un evento al client (puoi gestirlo lato Lua se necessario)
-      document.getElementById('dummyAction').addEventListener('click', () => {
-        // Esempio: invia un messaggio verso il client per eventuali azioni
-        // fetch(`https://${resourceName}/doSomething`, { method: 'POST', body: JSON.stringify({ foo: 'bar' }) });
-        alert('Azione demo eseguita (solo NUI).');
-      });
+      // Azione dimostrativa (se presente)
+      const dummyBtn = document.getElementById('dummyAction');
+      if (dummyBtn) {
+        dummyBtn.addEventListener('click', () => {
+          alert('Azione demo eseguita (solo NUI).');
+        });
+      }
+
+      console.log('[Astio:NUI] Inizializzato', { resourceName });
     </script>
   </body>
 </html>
